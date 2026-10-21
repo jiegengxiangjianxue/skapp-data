@@ -1,0 +1,52 @@
+name: skapp-symbols
+# skapp-data 仓: app 从这里读 data/data/search/symbols.json(双 data 路径)。
+# 本 workflow 把仓内 data/search/symbols.json(全市场 5575 条)转换为 app 期望的
+# 双键格式(s,n,symbol,name)发布到 data/data/search/symbols.json。
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: skapp-symbols
+  cancel-in-progress: true
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: Sync remote main
+        run: |
+          git fetch origin main
+          git merge --ff-only origin/main || echo "already up to date"
+      - name: Build dual-key symbols
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+          src = "data/search/symbols.json"
+          if not os.path.exists(src):
+              print("source missing:", src); raise SystemExit(0)
+          raw = json.load(open(src))
+          out = []
+          for e in raw if isinstance(raw, list) else []:
+              if not isinstance(e, dict): continue
+              code = e.get("s") or e.get("symbol")
+              name = e.get("n") or e.get("name")
+              if code:
+                  out.append({"s": code, "n": name, "symbol": code, "name": name})
+          os.makedirs("data/data/search", exist_ok=True)
+          json.dump(out, open("data/data/search/symbols.json", "w"), ensure_ascii=False, separators=(",", ":"))
+          print("symbols:", len(out))
+          PYEOF
+      - name: Commit & push
+        run: |
+          git config user.name "skapp-symbols-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -- data/data/search/symbols.json
+          git commit -m "symbols $(date -u +%FT%TZ)" || echo "no change"
+          git push
